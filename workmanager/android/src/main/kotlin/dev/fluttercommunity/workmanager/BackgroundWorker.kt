@@ -37,8 +37,6 @@ class BackgroundWorker(
         const val BACKGROUND_CHANNEL_NAME =
             "be.tramckrijte.workmanager/background_channel_work_manager"
         const val BACKGROUND_CHANNEL_INITIALIZED = "backgroundChannelInitialized"
-
-        private val flutterLoader = FlutterLoader()
     }
 
     private val payload
@@ -68,42 +66,48 @@ class BackgroundWorker(
 
         engine = FlutterEngine(applicationContext)
 
+        // Get Flutter loader instance
+        val flutterLoader = FlutterLoader()
+        
         if (!flutterLoader.initialized()) {
             flutterLoader.startInitialization(applicationContext)
+            flutterLoader.ensureInitializationComplete(applicationContext, null)
         }
+        
+        // Now safely on main thread, get the callback info
+        Handler(Looper.getMainLooper()).post {
+            try {
+                val callbackHandle = SharedPreferenceHelper.getCallbackHandle(applicationContext)
+                val callbackInfo = FlutterCallbackInformation.lookupCallbackInformation(callbackHandle)
+                val dartBundlePath = flutterLoader.findAppBundlePath()
 
-        flutterLoader.ensureInitializationCompleteAsync(
-            applicationContext,
-            null,
-            Handler(Looper.getMainLooper()),
-        ) {
-            val callbackHandle = SharedPreferenceHelper.getCallbackHandle(applicationContext)
-            val callbackInfo = FlutterCallbackInformation.lookupCallbackInformation(callbackHandle)
-            val dartBundlePath = flutterLoader.findAppBundlePath()
-
-            if (isInDebug) {
-                DebugHelper.postTaskStarting(
-                    applicationContext,
-                    randomThreadIdentifier,
-                    dartTask,
-                    payload,
-                    callbackHandle,
-                    callbackInfo,
-                    dartBundlePath,
-                )
-            }
-
-            engine?.let { engine ->
-                backgroundChannel = MethodChannel(engine.dartExecutor, BACKGROUND_CHANNEL_NAME)
-                backgroundChannel.setMethodCallHandler(this@BackgroundWorker)
-
-                engine.dartExecutor.executeDartCallback(
-                    DartExecutor.DartCallback(
-                        applicationContext.assets,
-                        dartBundlePath,
+                if (isInDebug) {
+                    DebugHelper.postTaskStarting(
+                        applicationContext,
+                        randomThreadIdentifier,
+                        dartTask,
+                        payload,
+                        callbackHandle,
                         callbackInfo,
-                    ),
-                )
+                        dartBundlePath,
+                    )
+                }
+
+                engine?.let { engine ->
+                    backgroundChannel = MethodChannel(engine.dartExecutor, BACKGROUND_CHANNEL_NAME)
+                    backgroundChannel.setMethodCallHandler(this@BackgroundWorker)
+
+                    engine.dartExecutor.executeDartCallback(
+                        DartExecutor.DartCallback(
+                            applicationContext.assets,
+                            dartBundlePath,
+                            callbackInfo,
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting Flutter engine: ${e.message}")
+                stopEngine(Result.failure())
             }
         }
 
